@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// We use gemini-1.5-flash because it is lightning fast for RAG tasks
 const llm = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
   model : "gemini-2.5-flash",

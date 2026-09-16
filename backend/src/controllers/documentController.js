@@ -1,37 +1,57 @@
+import { logInteraction } from '../services/dbService.js';
+import Document from '../models/Document.js';
+import Chat from '../models/Chat.js';
 import { parsePdf } from '../services/pdfService.js';
 import { chunkFixedSize } from '../services/chunkingService.js';
 import { storeChunksInChroma } from '../services/vectorStore.js';
 import { retrieveRelevantChunks } from '../services/vectorStore.js';
 import { generateAnswer } from '../services/llmService.js';
+import { chunkSemantic } from '../services/chunkingService.js';
 
 export async function handlePdfUpload(req, res) {
   try {
     if (!req.file) return res.status(400).json({ error: 'No PDF provided.' });
 
+    const strategy = req.body.strategy === 'semantic' ? 'semantic' : 'fixed';
+
     console.log(`1. Parsing PDF: ${req.file.originalname}`);
     const docs = await parsePdf(req.file.path);
+    console.log(`2. Chunking Document (Strategy: ${strategy})`);
+    let chunks;
+    if (strategy === 'semantic') {
+      chunks = await chunkSemantic(docs);
+    } else {
+      chunks = await chunkFixedSize(docs);
+    }
 
-    console.log(`2. Chunking Document (Strategy: Fixed-Size)`);
-    const chunks = await chunkFixedSize(docs);
-
-    // FIX: Filter out any chunks that are completely empty or just whitespace
-    const validChunks = chunks.filter(chunk => chunk.pageContent.trim().length > 0);
-
-    console.log(`-> Kept ${validChunks.length} valid chunks out of ${chunks.length} total.`);
-
-    // If the PDF was totally unreadable (e.g., a scanned image), stop here.
-    if (validChunks.length === 0) {
-      return res.status(422).json({ 
-        error: 'Could not extract any readable text from this PDF. It might be a scanned image or an incompatible slide deck.' 
+    const validChunks = chunks
+      .filter(chunk => chunk.pageContent.trim().length > 0)
+      .map(chunk => {
+        chunk.metadata = { ...chunk.metadata, strategy: strategy };
+        return chunk;
       });
+
+    console.log(`-> Kept ${validChunks.length} valid chunks.`);
+
+    if (validChunks.length === 0) {
+      return res.status(422).json({ error: 'Could not extract any readable text.' });
     }
 
     console.log(`3. Generating Embeddings and Storing in Chroma...`);
-    // Create a safe, lowercase collection name
-    const collectionName = req.file.originalname.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+   const baseCollectionName = req.file.originalname.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+    const collectionName = `${baseCollectionName}_${strategy}`;
     
-    // Pass ONLY the valid chunks to Chroma
     await storeChunksInChroma(validChunks, collectionName);
+    const newDoc = new Document({
+      filename: req.file.originalname,
+      collectionName: collectionName,
+      pageCount: docs.length,
+      chunkCount: validChunks.length,
+      chunkingStrategy: strategy
+    });
+    await newDoc.save();
+    console.log('-> Document metadata saved to MongoDB.');
 
     res.status(200).json({
       message: 'PDF successfully parsed, chunked, and stored in vector database.',
@@ -39,6 +59,7 @@ export async function handlePdfUpload(req, res) {
       stats: {
         totalPages: docs.length,
         totalChunksGenerated: validChunks.length,
+        strategyUsed: strategy
       }
     });
   } catch (error) {
@@ -59,7 +80,6 @@ export async function askQuestion(req, res) {
     console.log(`-> Searching collection: ${collectionName}`);
     
     const chunks = await retrieveRelevantChunks(question, collectionName, 4);
-
     
     if (chunks.length === 0) {
       return res.status(404).json({ error: "No relevant information found in the document." });
@@ -67,11 +87,36 @@ export async function askQuestion(req, res) {
 
     console.log(`-> Found ${chunks.length} relevant chunks. Generating answer...`);
     const answer = await generateAnswer(question, chunks);
+    
+    // SQLite Evaluation Logging
+    try {
+      const sourcesForLog = chunks.map(c => ({
+        page: c.metadata.pageNumber,
+        text: c.pageContent 
+      }));
+      await logInteraction(collectionName, question, answer, sourcesForLog);
+      console.log('-> Interaction saved to SQLite evaluation database.');
+    } catch (dbError) {
+      console.error('-> [!] Failed to log to SQLite:', dbError);
+    }
 
-    const ans = answer 
-    console.log(ans)
+    // MongoDB Application Metadata Logging
+    try {
+      const newChat = new Chat({
+        question: question,
+        collectionName: collectionName,
+        answer: answer,
+        retrievedChunks: chunks.map(c => ({
+          page: c.metadata.pageNumber,
+          preview: c.pageContent.substring(0, 150)
+        }))
+      });
+      await newChat.save();
+      console.log('-> Chat metadata saved to MongoDB.');
+    } catch (mongoErr) {
+      console.error('-> [!] Failed to log chat to MongoDB:', mongoErr);
+    }
 
-    // Return the final answer alongside the exact chunks it used (great for debugging!)
     res.status(200).json({
       answer: answer,
       sources: chunks.map(c => ({

@@ -16,3 +16,15 @@ export async function chunkFixedSize(docs, chunkSize = 1000, chunkOverlap = 200)
     return chunk;
   });
 }
+
+export async function chunkSemantic(docs) {
+  const splitter = new RecursiveCharacterTextSplitter({
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    // These separators tell it to respect semantic boundaries
+    separators: ["\n\n", "\n", ".", "?", "!", " ", ""], 
+  });
+
+  const chunks = await splitter.splitDocuments(docs);
+  return chunks;
+}
