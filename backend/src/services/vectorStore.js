@@ -1,12 +1,13 @@
 import { Chroma } from '@langchain/community/vectorstores/chroma';
-import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
+import { ChromaClient } from 'chromadb';
+import { HuggingFaceTransformersEmbeddings } from '@langchain/community/embeddings/hf_transformers';
+import { BM25, reciprocalRankFusion } from './bm25Service.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const embeddings = new GoogleGenerativeAIEmbeddings({
-  apiKey: process.env.GEMINI_API_KEY,
-  modelName: 'gemini-embedding-2', 
+const embeddings = new HuggingFaceTransformersEmbeddings({
+  modelName: 'Xenova/all-MiniLM-L6-v2',
 });
 
 export async function storeChunksInChroma(chunks, collectionName = 'pdf_eval_collection') {
@@ -22,21 +23,26 @@ export async function storeChunksInChroma(chunks, collectionName = 'pdf_eval_col
       };
       return chunk;
     }).filter(chunk => {
-      // STRICT FILTER: The chunk must contain at least 15 alphanumeric characters.
-      // This prevents formatting blocks or empty spaces from crashing the API.
       const alphanumericCount = (chunk.pageContent.match(/[a-zA-Z0-9]/g) || []).length;
       return alphanumericCount > 15;
     }); 
 
-    console.log(`-> Prepared ${cleanChunks.length} strictly cleaned chunks. Sending in batches...`);
+    console.log(`-> Prepared ${cleanChunks.length} strictly cleaned chunks.`);
+
+    const client = new ChromaClient({ path: process.env.CHROMA_URL || 'http://localhost:8000' });
+    try {
+      await client.getCollection({ name: collectionName });
+      console.log(`-> Resetting existing Chroma collection '${collectionName}'...`);
+      await client.deleteCollection({ name: collectionName });
+    } catch {
+    }
 
     const vectorStore = new Chroma(embeddings, {
       collectionName: collectionName,
       url: process.env.CHROMA_URL || 'http://localhost:8000',
     });
 
-    // We are lowering the batch size to 10 chunks at a time
-    const BATCH_SIZE = 10; 
+    const BATCH_SIZE = 50; 
     let successfulBatches = 0;
 
     for (let i = 0; i < cleanChunks.length; i += BATCH_SIZE) {
@@ -50,13 +56,8 @@ export async function storeChunksInChroma(chunks, collectionName = 'pdf_eval_col
         await vectorStore.addDocuments(batch);
         successfulBatches++;
       } catch (batchError) {
-        console.warn(`   [!] Batch ${batchNum} failed. Rate limit likely hit.`);
+        console.error(`   [!] Batch ${batchNum} failed:`, batchError);
       }
-      
-      // THE FIX: Wait a massive 12 seconds between batches.
-      // 10 chunks * 12 seconds = slow, but guaranteed to stay under 15 Requests Per Minute.
-      console.log(`      Waiting 12 seconds for API cooldown...`);
-      await new Promise(resolve => setTimeout(resolve, 12000));
     }
     
     console.log(`-> Finished! Successfully stored ${successfulBatches} out of ${Math.ceil(cleanChunks.length / BATCH_SIZE)} batches in Chroma.`);
@@ -66,7 +67,7 @@ export async function storeChunksInChroma(chunks, collectionName = 'pdf_eval_col
     throw error;
   }
 }
-// Add this to the bottom of vectorStore.js
+
 export async function retrieveRelevantChunks(query, collectionName, topK = 4) {
   try {
     const vectorStore = new Chroma(embeddings, {
@@ -74,11 +75,72 @@ export async function retrieveRelevantChunks(query, collectionName, topK = 4) {
       url: process.env.CHROMA_URL || 'http://localhost:8000',
     });
     
-    // Chroma handles the vector math and ranking automatically in milliseconds!
     const results = await vectorStore.similaritySearch(query, topK);
     return results;
   } catch (error) {
     console.error("Error retrieving chunks:", error);
     throw error;
+  }
+}
+
+export async function getAllChunksFromChroma(collectionName) {
+  const client = new ChromaClient({ path: process.env.CHROMA_URL || 'http://localhost:8000' });
+  const collection = await client.getCollection({ name: collectionName });
+  const data = await collection.get({
+    include: ['documents', 'metadatas']
+  });
+
+  const chunks = [];
+  if (data && data.documents) {
+    for (let i = 0; i < data.documents.length; i++) {
+      chunks.push({
+        id: data.ids[i],
+        pageContent: data.documents[i],
+        metadata: data.metadatas[i] || {}
+      });
+    }
+  }
+  return chunks;
+}
+
+export async function retrieveHybridChunks(query, collectionName, topK = 4) {
+  try {
+    console.log(`-> Running Hybrid Search (Dense Chroma + Sparse BM25 + RRF) on ${collectionName}`);
+    const candidateLimit = Math.max(topK * 2, 8);
+
+    const vectorStore = new Chroma(embeddings, {
+      collectionName: collectionName,
+      url: process.env.CHROMA_URL || 'http://localhost:8000',
+    });
+    const denseResults = await vectorStore.similaritySearch(query, candidateLimit);
+
+    let bm25Results = [];
+    try {
+      const allChunks = await getAllChunksFromChroma(collectionName);
+      if (allChunks.length > 0) {
+        const bm25 = new BM25(allChunks);
+        const ranked = bm25.search(query, candidateLimit);
+        bm25Results = ranked.map(r => r.chunk);
+      }
+    } catch (lexicalErr) {
+      console.warn('   [!] Lexical search fallback (proceeding with dense):', lexicalErr.message);
+    }
+
+    const fusedResults = reciprocalRankFusion(denseResults, bm25Results, topK);
+    console.log(`-> Hybrid RRF fused ${denseResults.length} dense and ${bm25Results.length} sparse chunks into top ${fusedResults.length} results.`);
+    return fusedResults.length > 0 ? fusedResults : denseResults.slice(0, topK);
+  } catch (error) {
+    console.error("Error retrieving hybrid chunks:", error);
+    return retrieveRelevantChunks(query, collectionName, topK);
+  }
+}
+
+export async function deleteCollectionFromChroma(collectionName) {
+  try {
+    const client = new ChromaClient({ path: process.env.CHROMA_URL || 'http://localhost:8000' });
+    await client.deleteCollection({ name: collectionName });
+    console.log(`-> Deleted Chroma collection: ${collectionName}`);
+  } catch (err) {
+    console.warn(`-> Could not delete Chroma collection ${collectionName}:`, err.message);
   }
 }

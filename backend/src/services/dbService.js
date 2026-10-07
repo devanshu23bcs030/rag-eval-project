@@ -13,7 +13,6 @@ export async function getDb() {
     driver: sqlite3.Database
   });
 
-  // 1. Existing qa_logs table (Application Chat Logs)
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS qa_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +24,6 @@ export async function getDb() {
     )
   `);
 
-  // 2. NEW: Evaluation Ground Truth Questions
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS eval_questions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +34,6 @@ export async function getDb() {
     )
   `);
 
-  // 3. NEW: Evaluation Strategies (e.g., 'fixed', 'semantic')
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS eval_strategies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +41,6 @@ export async function getDb() {
     )
   `);
 
-  // 4. NEW: Evaluation Runs (The actual test results)
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS eval_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +59,6 @@ export async function getDb() {
   return dbInstance;
 }
 
-// --- EXISTING LOGGING FUNCTION ---
 export async function logInteraction(collectionName, question, answer, sources) {
   const db = await getDb();
   const contextString = JSON.stringify(sources);
@@ -74,13 +69,9 @@ export async function logInteraction(collectionName, question, answer, sources) 
   );
 }
 
-// --- NEW EVALUATION FUNCTIONS ---
-
 export async function insertEvalStrategy(strategyName) {
   const db = await getDb();
-  // Insert the strategy if it doesn't exist yet
   await db.run(`INSERT OR IGNORE INTO eval_strategies (strategy_name) VALUES (?)`, [strategyName]);
-  // Return the ID of the strategy
   const row = await db.get(`SELECT id FROM eval_strategies WHERE strategy_name = ?`, [strategyName]);
   return row.id;
 }
@@ -97,7 +88,6 @@ export async function insertEvalQuestion(pdfName, questionText, expectedAnswer, 
 
 export async function insertEvalRun(questionId, strategyId, wasChunkRetrieved, retrievalRank, generatedAnswer) {
   const db = await getDb();
-  // SQLite doesn't have a native BOOLEAN, so we convert true/false to 1/0
   const retrievedBool = wasChunkRetrieved ? 1 : 0;
   
   await db.run(
@@ -110,7 +100,6 @@ export async function insertEvalRun(questionId, strategyId, wasChunkRetrieved, r
 export async function getStrategyComparison() {
   const db = await getDb();
   
-  // This aggregation query calculates Hit Rate % and Mean Reciprocal Rank (MRR)
   const rows = await db.all(`
     SELECT 
       s.strategy_name,

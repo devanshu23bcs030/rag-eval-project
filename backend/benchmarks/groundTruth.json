@@ -1,0 +1,77 @@
+[
+    {
+        "id": 1,
+        "question": "What does DCL stand for?",
+        "expected_needle": "Data Control Language which acts as an access specifier to the database"
+    },
+    {
+        "id": 2,
+        "question": "What is the main disadvantage of a 3-Tier Architecture?",
+        "expected_needle": "Communication Points are also doubled in 3-Tier Architecture"
+    },
+    {
+        "id": 3,
+        "question": "What are the ACID properties?",
+        "expected_needle": "acronym ACID stands for Atomicity, Consistency, Isolation, and Durability"
+    },
+    {
+        "id": 4,
+        "question": "What is a Clustered Index?",
+        "expected_needle": "establishes a physical sorting order of rows"
+    },
+    {
+        "id": 5,
+        "question": "What does TCL stand for?",
+        "expected_needle": "Transactional Control Language which acts as a manager for all types of transactional data"
+    },
+    {
+        "id": 6,
+        "question": "Why does a dirty read occur in a database?",
+        "expected_needle": "when one transaction updates an item but due to some unconditional events that transaction fails"
+    },
+    {
+        "id": 7,
+        "question": "What is BCNF?",
+        "expected_needle": "Boyce-Codd Normal Form (BCNF) is just an advanced version of Third Normal Form"
+    },
+    {
+        "id": 8,
+        "question": "What is a Right Outer Join?",
+        "expected_needle": "returns all the rows of the table on the right side of the join and matching rows for the table on the left side"
+    },
+    {
+        "id": 9,
+        "question": "How does the Wait-Die scheme work?",
+        "expected_needle": "allows the older transaction to wait until the resource is available for execution"
+    },
+    {
+        "id": 10,
+        "question": "Define an Entity Set.",
+        "expected_needle": "An Entity is an object of Entity Type, and a set of all entities is called an entity set"
+    },
+    {
+        "id": 11,
+        "question": "What is a Phantom Read?",
+        "expected_needle": "two same queries are executed, but the rows retrieved by the two, are different"
+    },
+    {
+        "id": 12,
+        "question": "What happens during the Growing Phase in Two-Phase Locking?",
+        "expected_needle": "New locks on data items may be acquired but none can be released."
+    },
+    {
+        "id": 13,
+        "question": "How is a Weak Entity visually represented?",
+        "expected_needle": "weak entity type is represented by a Double Rectangle"
+    },
+    {
+        "id": 14,
+        "question": "What is Data Manipulation Language?",
+        "expected_needle": "Data Manipulation Language which deals with data manipulation"
+    },
+    {
+        "id": 15,
+        "question": "What is the difference between Strict and Rigorous 2-PL?",
+        "expected_needle": "Rigorous is more restrictive, it requires both Exclusive and Shared locks to be held until after the Transaction commits"
+    }
+]
